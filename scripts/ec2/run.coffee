@@ -181,6 +181,11 @@ module.exports = (robot) ->
 
           messages.push("#{state}\t#{id}\t#{type}\t#{ip}\t#{name}")
 
+          unless 'instance_to_user_id' in robot.brain.data
+            robot.brain.data['instance_to_user_id'] = {}
+
+          robot.brain.data.instance_to_user_id[ins.InstanceId] = msg.envelope.user.id
+
         messages.sort()
         message = messages.join "\n"
         msg.send message

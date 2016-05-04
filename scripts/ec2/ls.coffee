@@ -75,6 +75,22 @@ instance_has_expired = (instance) ->
   is_not_expired_now = expiration_tag > moment()
   return is_not_expired_now
 
+get_unique_users = (instances) ->
+  users = {}
+  for instance in instances
+    if instance.InstanceId in robot.brain.data.instance_to_user_id
+      user = robot.brain.data.instance_to_user_id[instance.InstanceId]
+      if user not in users
+        users[user] = true
+  return user.keys()
+
+instance_has_user = (robot, user) -> 
+  return (instance) ->
+    iid = instance.InstanceId
+    unless iid in robot.brain.data.instance_to_user_id
+      return false
+    return robot.brain.data.instance_to_user_id[iid] == user
+
 handle_instances = (robot) ->
   return (instances) ->
     instances_that_will_expire = instances.filter instance_will_expire_soon
@@ -82,6 +98,12 @@ handle_instances = (robot) ->
 
     robot.messageRoom process.env.HUBOT_EC2_MENTION_ROOM, "Instances that will expire soon...\n" + 
       messages_from_ec2_instances(instances_that_will_expire)
+
+    unqiue_users = get_unique_users(instances_that_will_expire)
+    for user in unique_users
+      instance_sub_set = instances_that_will_expire.filter instance_has_user(robot, user) 
+      robot.messageRoom user, "Instances that will expire soon...\n" + 
+      messages_from_ec2_instances(instance_sub_set)
 
     robot.messageRoom process.env.HUBOT_EC2_MENTION_ROOM, "Instances that have expired...\n" + 
       messages_from_ec2_instances(instances_that_have_expired)

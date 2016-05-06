@@ -21,18 +21,20 @@ EXPIRED_MESSAGE = "Instances that have expired \n"
 EXPIRES_SOON_MESSAGE = "Instances that will expire soon \n"
 USER_EXPIRES_SOON_MESSAGE = "List of your instances that will expire soon: \n"
 EXTEND_COMMAND ="\nIf you wish to extend run 'cfpbot ec2 extend [instanceIds]'"
+DAYS_CONSIDERED_SOON = 2
 
 ec2 = require('../../ec2.coffee')
 
-getArgParams = (arg, filter = "all", opt_arg = "") ->
+getInstancesFromArg=(arg)->
   instances = []
   if arg
     for av in arg.split /\s+/
       if av and not av.match(/^--/)
         instances.push(av)
+  return instances
 
+getParamsFromFilter = (filter, opt_arg, instances)->
   params = {}
-
   if filter == "mine"
     params['Filters'] = [{Name: 'tag:Creator', Values: [opt_arg]}]
   else if filter == "chat"
@@ -41,53 +43,24 @@ getArgParams = (arg, filter = "all", opt_arg = "") ->
     params['Filters'] = [{ Name: 'tag:Name', Values: ["*#{instances[0]}*"] }]
   else if instances.length
     params['InstanceIds'] = instances
-
-  if Object.keys(params).length > 0
-    return params
   else
     return null
+  return params
 
-listEC2Instances = (params, complete, error) ->
-  ec2.describeInstances params, (err, res) ->
-    if err
-      error(err)
-    else
-      instances = []
 
-      for reservation in res.Reservations
-        for instance in reservation.Instances
-          instances.push(instance)
+getArgParams = (arg, filter = "all", opt_arg = "") ->
+  instances = getInstancesFromArg(arg)
+  params = getParamsFromFilter(filter, opt_arg, instances)
+  return params
 
-      complete(instances)
+getInstancesFromReservation=(reservation) ->
+  instances = []
 
-get_expiration_tag = (tag) ->
-  return tag.Key == "ExpireDate"
+  for reservation in res.Reservations
+    for instance in reservation.Instances
+      instances.push(instance)
 
-instance_will_expire_soon = (instance) ->
-  expiration_tag = instance.Tags.filter get_expiration_tag
-
-  if expiration_tag.length == 0
-    return false
-
-  expiraton_moment = moment(expiration_tag[0].Value).format('YYYY-MM-DD')
-
-  DAYS_CONSIDERED_SOON = 2
-  will_be_expired_in_x_days = expiraton_moment < moment().add(DAYS_CONSIDERED_SOON, 'days').format('YYYY-MM-DD')
-  is_not_expired_now = expiraton_moment < moment().format('YYYY-MM-DD')
-  return will_be_expired_in_x_days and not is_not_expired_now
-
-instance_has_expired = (instance) ->
-  expiration_tag = instance.Tags.filter get_expiration_tag
-  if expiration_tag.length == 0
-    return false
-
-  expiraton_moment = moment(expiration_tag[0].Value).format('YYYY-MM-DD')
-
-  is_not_expired_now = expiraton_moment < moment().format('YYYY-MM-DD')
-  return is_not_expired_now
-
-extract_message = (instances, msg)->
-  return msg + messages_from_ec2_instances(instances)
+  return instances
 
 get_instance_tag = (instance, key, default_value = "")->
   tags = _.filter(instance.Tags, (tag)-> return tag.Key == key)
@@ -96,45 +69,36 @@ get_instance_tag = (instance, key, default_value = "")->
   else
     return default_value
 
-handle_instances = (robot) ->
-  msg_room = (msg_text, room = process.env.HUBOT_EC2_MENTION_ROOM) ->
-    robot.messageRoom room, msg_text
+listEC2Instances = (params, complete, error) ->
+  ec2.describeInstances params, (err, res) ->
+    if err
+      error(err)
+    else
+      complete(instances)
 
-  return (instances) ->
-    instances_that_expired = instances.filter instance_has_expired
-    instances_that_will_expire = instances.filter instance_will_expire_soon
+instance_will_expire_soon = (instance) ->
+  expiration_tag = get_instance_tag(instance, "ExpireDate", false)
 
-    msg_text_expired = extract_message(instances_that_expired, EXPIRED_MESSAGE)
-    msg_text_expire_soon = extract_message(instances_that_will_expire, EXPIRES_SOON_MESSAGE)
+  unless expiration_tag
+    return false
 
-    msg_room(msg_text_expired)
-    msg_room(msg_text_expire_soon)
+  expiraton_moment = moment(expiration_tag).format('YYYY-MM-DD')
 
-    for user in _.values(robot.brain.data.users)
-      creator_email = user.email_address || "_DL_CFPB_Software_Delivery_Team@cfpb.gov"
-      user_id = user.id || 1
+  will_be_expired_in_x_days = expiraton_moment < moment().add(DAYS_CONSIDERED_SOON, 'days').format('YYYY-MM-DD')
+  is_not_expired_now = expiraton_moment < moment().format('YYYY-MM-DD')
 
-      user_instances = _.filter(instances_that_will_expire, (this_instance)-> return get_instance_tag(this_instance, 'Creator') == creator_email)
+  return will_be_expired_in_x_days and not is_not_expired_now
 
-      if user_instances
-        msg_text_expire_soon = extract_message(user_instances, USER_EXPIRES_SOON_MESSAGE) + EXTEND_COMMAND
+instance_has_expired = (instance) ->
+  expiration_tag = get_instance_tag(instance, "ExpireDate", false)
+  unless expiration_tag
+    return false
 
-        robot.send({user: user_id}, msg_text_expire_soon)
+  expiraton_moment = moment(expiration_tag[0].Value).format('YYYY-MM-DD')
 
-    ec2.stopInstances {InstanceIds: _.pluck(instances_that_expired, 'InstanceId')}, (err, res) ->
-      if err
-        msg_room(res)
+  is_not_expired_now = expiraton_moment < moment().format('YYYY-MM-DD')
 
-
-handle_ec2_instance = (robot) ->
-  if process.env.HUBOT_EC2_MENTION_ROOM
-    params = getArgParams(null, filter = "chat")
-    listEC2Instances(params, handle_instances(robot), ->)
-
-ec2_setup_polling = (robot) ->
-  setInterval ->
-    handle_ec2_instance(robot)?
-  , 1000 * 60 * 60 * 8
+  return is_not_expired_now
 
 messages_from_ec2_instances = (instances) ->
 
@@ -160,6 +124,65 @@ messages_from_ec2_instances = (instances) ->
     moment(a.time) - moment(b.time)
   return tsv.stringify(messages) || '[None]'
 
+extract_message = (instances, msg)->
+  return msg + messages_from_ec2_instances(instances)
+
+
+get_msg_room_from_robot = (robot) ->
+  return (msg_text, room = process.env.HUBOT_EC2_MENTION_ROOM) ->
+    robot.messageRoom room, msg_text
+
+get_msg_user_from_robot = (robot) ->
+  return (user_id, msg) ->
+    robot.send({user: user_id}, msg)
+
+ec2_stop_instances = (ec2, params, msg_room) -> 
+  ec2.stopInstances params, (err, res) ->
+    if err
+      msg_room(res)
+
+getStopParamsFromInstances = (instances)->
+  return {InstanceIds: _.pluck(instances, 'InstanceId')}
+
+handle_instances_with_message_controler = (robot, msg_room, msg_user, ec2_stop_instances) ->
+  instances_that_expired = instances.filter instance_has_expired
+  instances_that_will_expire = instances.filter instance_will_expire_soon
+
+  msg_text_expired = extract_message(instances_that_expired, EXPIRED_MESSAGE)
+  msg_text_expire_soon = extract_message(instances_that_will_expire, EXPIRES_SOON_MESSAGE)
+
+  msg_room(msg_text_expired)
+  msg_room(msg_text_expire_soon)
+
+  for user in _.values(robot.brain.data.users)
+    creator_email = user.email_address || "_DL_CFPB_Software_Delivery_Team@cfpb.gov"
+    user_id = user.id || 1
+
+    user_instances = _.filter(instances_that_will_expire, (this_instance)-> return get_instance_tag(this_instance, 'Creator') == creator_email)
+
+    if user_instances
+      msg_text_expire_soon = extract_message(user_instances, USER_EXPIRES_SOON_MESSAGE) + EXTEND_COMMAND
+
+      msg_user(user_id, msg_text_expire_soon)
+
+  stop_instance_ids_params = getStopParamsFromInstances(instances_that_expired)
+  ec2_stop_instances(ec2, stop_instance_ids_params, msg_room)
+
+handle_instances = (robot) ->
+  msg_room = get_msg_room_from_robot(robot)
+  msg_user = get_msg_user_from_robot(robot)
+  return handle_instances_with_message_controler(robot, msg_room, msg_user, ec2)
+
+
+handle_ec2_instance = (robot) ->
+  if process.env.HUBOT_EC2_MENTION_ROOM
+    params = getArgParams(null, filter = "chat")
+    listEC2Instances(params, handle_instances(robot), ->)
+
+ec2_setup_polling = (robot) ->
+  setInterval ->
+    handle_ec2_instance(robot)?
+  , 1000 * 60 * 60 * 8
 
 error_ec2_instances = (msg, err) ->
   return (err) ->

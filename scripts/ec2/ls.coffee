@@ -136,8 +136,9 @@ get_msg_user_from_robot = (robot) ->
   return (user_id, msg) ->
     robot.send({user: user_id}, msg)
 
-ec2_stop_instances = (ec2, params, msg_room) -> 
-  ec2.stopInstances params, (err, res) ->
+get_ec2_stop_instances = (ec2) -> 
+  return (params, msg_room) ->
+    ec2.stopInstances params, (err, res) ->
     if err
       msg_room(res)
 
@@ -166,12 +167,13 @@ handle_instances_with_message_controler = (robot, msg_room, msg_user, ec2_stop_i
       msg_user(user_id, msg_text_expire_soon)
 
   stop_instance_ids_params = getStopParamsFromInstances(instances_that_expired)
-  ec2_stop_instances(ec2, stop_instance_ids_params, msg_room)
+  ec2_stop_instances(stop_instance_ids_params, msg_room)
 
 handle_instances = (robot) ->
   msg_room = get_msg_room_from_robot(robot)
   msg_user = get_msg_user_from_robot(robot)
-  return handle_instances_with_message_controler(robot, msg_room, msg_user, ec2)
+  ec2_stop_instances = get_ec2_stop_instances(ec2)
+  return handle_instances_with_message_controler(robot, msg_room, msg_user, ec2_stop_instances)
 
 
 handle_ec2_instance = (robot) ->
